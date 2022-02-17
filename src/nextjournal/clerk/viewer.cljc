@@ -168,6 +168,32 @@
 
 (declare !viewers)
 
+(def viewer-sequential {:pred sequential? :render-fn 'v/coll-viewer :opening-paren "(" :closing-paren ")" :fetch-opts {:n 20}})
+
+(def viewer-table        {:name :table :render-fn (quote v/table-viewer) :fetch-opts {:n 5}
+                          :transform-fn (fn [xs]
+                                          (-> (wrap-value xs)
+                                              (update :nextjournal/width #(or % :wide))
+                                              (update :nextjournal/value #(or (normalize-table-data %)
+                                                                              {:error "Could not normalize table" :ex-data %}))
+                                              (update :nextjournal/viewers concat (:table @!viewers))))
+                          :fetch-fn (fn [{:as opts :keys [describe-fn offset path]} xs]
+                                      ;; TODO: use budget per row for table
+                                      ;; TODO: opt out of eliding cols
+                                      (cond (:error xs) (update xs :ex-data describe-fn opts [])
+                                            (seq path) (describe-fn (:rows xs) opts [])
+                                            :else (-> (cond-> (update xs :rows describe-fn (dissoc opts :!budget) [])
+                                                        (pos? offset) :rows)
+                                                      (assoc :path [:rows] :replace-path [offset])
+                                                      (dissoc :nextjournal/viewers))))})
+(def viewer-tex          {:name :latex :render-fn (quote v/katex-viewer) :fetch-fn fetch-all})
+(def viewer-notebook     {:name :clerk/notebook :render-fn (quote v/notebook-viewer) :fetch-fn fetch-all})
+
+(defn doc-url [path]
+  (->viewer-eval (list 'v/doc-url path)))
+
+
+
 ;; keep viewer selection stricly in Clojure
 (def default-viewers
   ;; maybe make this a sorted-map
@@ -184,7 +210,7 @@
    {:pred var-from-def? :transform-fn (fn [x] (-> x :nextjournal.clerk/var-from-def deref))}
    {:pred vector? :render-fn 'v/coll-viewer :opening-paren "[" :closing-paren "]" :fetch-opts {:n 20}}
    {:pred set? :render-fn 'v/coll-viewer :opening-paren "#{" :closing-paren "}" :fetch-opts {:n 20}}
-   {:pred sequential? :render-fn 'v/coll-viewer :opening-paren "(" :closing-paren ")" :fetch-opts {:n 20}}
+   viewer-sequential
    {:pred map? :name :map :render-fn 'v/map-viewer :opening-paren "{" :closing-paren "}" :fetch-opts {:n 10}}
    {:pred uuid? :render-fn '(fn [x] (v/html (v/tagged-value "#uuid" [:span.syntax-string.inspected-value "\"" (str x) "\""])))}
    {:pred inst? :render-fn '(fn [x] (v/html (v/tagged-value "#inst" [:span.syntax-string.inspected-value "\"" (str x) "\""])))}
@@ -203,7 +229,7 @@
             :render-fn '(fn [blob] (v/html [:figure.flex.flex-col.items-center [:img {:src (v/url-for blob)}]]))})
    {:pred (fn [_] true) :transform-fn pr-str :render-fn '(fn [x] (v/html [:span.inspected-value.whitespace-nowrap.text-gray-700 x]))}
    {:name :elision :render-fn (quote v/elision-viewer) :fetch-fn fetch-all}
-   {:name :latex :render-fn (quote v/katex-viewer) :fetch-fn fetch-all}
+   viewer-tex
    {:name :mathjax :render-fn (quote v/mathjax-viewer) :fetch-fn fetch-all}
    {:name :html :render-fn (quote v/html) :fetch-fn fetch-all}
    {:name :hiccup :render-fn (quote v/html)} ;; TODO: drop once markdown doesn't use it anymore
@@ -214,26 +240,11 @@
    {:name :code-folded :render-fn (quote v/foldable-code-viewer) :fetch-fn fetch-all :transform-fn #(let [v (value %)] (if (string? v) v (with-out-str (pprint/pprint v))))}
    {:name :reagent :render-fn (quote v/reagent-viewer)  :fetch-fn fetch-all}
    {:name :eval! :render-fn (constantly 'nextjournal.clerk.viewer/set-viewers!)}
-   {:name :table :render-fn (quote v/table-viewer) :fetch-opts {:n 5}
-    :transform-fn (fn [xs]
-                    (-> (wrap-value xs)
-                        (update :nextjournal/width #(or % :wide))
-                        (update :nextjournal/value #(or (normalize-table-data %)
-                                                        {:error "Could not normalize table" :ex-data %}))
-                        (update :nextjournal/viewers concat (:table @!viewers))))
-    :fetch-fn (fn [{:as opts :keys [describe-fn offset path]} xs]
-                ;; TODO: use budget per row for table
-                ;; TODO: opt out of eliding cols
-                (cond (:error xs) (update xs :ex-data describe-fn opts [])
-                      (seq path) (describe-fn (:rows xs) opts [])
-                      :else (-> (cond-> (update xs :rows describe-fn (dissoc opts :!budget) [])
-                                  (pos? offset) :rows)
-                                (assoc :path [:rows] :replace-path [offset])
-                                (dissoc :nextjournal/viewers))))}
+   viewer-table
    {:name :table-error :render-fn (quote v/table-error) :fetch-opts {:n 1}}
    {:name :object :render-fn '(fn [x] (v/html (v/tagged-value "#object" [v/inspect x])))}
    {:name :file :render-fn '(fn [x] (v/html (v/tagged-value "#file " [v/inspect x])))}
-   {:name :clerk/notebook :render-fn (quote v/notebook-viewer) :fetch-fn fetch-all}
+   viewer-notebook
    {:name :clerk/result :render-fn (quote v/result-viewer) :fetch-fn fetch-all}
    {:name :hide-result :transform-fn (fn [_] nil)}])
 
@@ -593,16 +604,17 @@
 #_(->> "x^2" (with-viewer :latex) (with-viewers [{:name :latex :render-fn :mathjax}]))
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; public convience api
 (def html         (partial with-viewer :html))
 (def md           (partial with-viewer :markdown))
 (def plotly       (partial with-viewer :plotly))
 (def vl           (partial with-viewer :vega-lite))
-(def table        (partial with-viewer :table))
-(def tex          (partial with-viewer :latex))
 (def hide-result  (partial with-viewer :hide-result))
-(def notebook     (partial with-viewer :clerk/notebook))
-(defn doc-url [path]
-  (->viewer-eval (list 'v/doc-url path)))
 (def code (partial with-viewer :code))
+
+
+
+
+
+(def table  (partial with-viewer viewer-table))
+(def tex  (partial with-viewer viewer-tex))
+(def notebook  (partial with-viewer viewer-notebook))

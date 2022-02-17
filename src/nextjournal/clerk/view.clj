@@ -174,7 +174,8 @@
        (select-keys [:blocks :toc :title])
        (cond-> (not toc?) (dissoc :toc))
        v/notebook
-       (cond-> ns (assoc :scope (v/datafy-scope ns))))))
+       (cond-> ns (assoc :scope (v/datafy-scope ns)))
+       v/describe)))
 
 #_(doc->viewer (nextjournal.clerk/eval-file "notebooks/hello.clj"))
 #_(nextjournal.clerk/show! "notebooks/test.clj")
